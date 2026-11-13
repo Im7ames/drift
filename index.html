@@ -99,15 +99,14 @@ function norm(s){s=s.trim();if(!s)return'';if(/^https?:\/\//i.test(s))return s;i
 const save=()=>ls.set('tabs',{cur,tabs:tabs.map(t=>({url:t.url,title:t.title}))});
 
 /* ---------- networking: fetch + CORS-proxy fallback ---------- */
+function tfetch(u,o,sig,ms){const c=new AbortController(),on=()=>c.abort();let to=false;sig.addEventListener('abort',on);const tm=setTimeout(()=>{to=true;c.abort()},ms);
+  return fetch(u,{...o,signal:c.signal,credentials:'omit'}).catch(e=>{if(to)e.timeout=true;throw e}).finally(()=>{clearTimeout(tm);sig.removeEventListener('abort',on)})}
 async function get(u,o,sig){
   const errs=[];
-  try{return await fetch(u,{...o,signal:sig,credentials:'omit'})}catch(e){if(sig.aborted)throw e;errs.push('Direct request blocked by the site (CORS)')}
+  try{return await tfetch(u,o,sig,8000)}catch(e){if(sig.aborted)throw e;errs.push(e.timeout?'Direct request timed out':'Direct request blocked by the site (CORS)')}
   const custom=ls.get('proxy',''),list=[custom,...PROXIES].filter(Boolean);
-  for(const p of list){
-    try{const r=await fetch(p+encodeURIComponent(u),{...o,signal:sig,credentials:'omit'});if(r.ok)return r;errs.push(hostOf(p)+' answered HTTP '+r.status)}
-    catch(e){if(sig.aborted)throw e;errs.push(hostOf(p)+' could not be reached')}
-  }
-  const er=new Error('Could not load '+hostOf(u));er.detail=errs;throw er
+  const via=p=>tfetch(p+encodeURIComponent(u),o,sig,10000).then(r=>{if(!r.ok)throw new Error(hostOf(p)+' answered HTTP '+r.status);return r},e=>{throw new Error(e.message&&/answered/.test(e.message)?e.message:hostOf(p)+(e.timeout?' timed out':' could not be reached'))});
+  try{return await Promise.any(list.map(via))}catch(e){if(sig.aborted)throw e;const er=new Error('Could not load '+hostOf(u));er.detail=errs.concat((e.errors||[]).map(x=>x.message));throw er}
 }
 /* ---------- rendering into a Shadow DOM (no iframes) ---------- */
 const BASE=`:host{display:block;background:#fff;color:#111;font:16px/1.5 system-ui,sans-serif;overflow-wrap:anywhere}.__b{min-height:100vh;padding:8px;margin:0}img,video,canvas,svg{max-width:100%;height:auto}table{max-width:100%}pre{overflow:auto}a{color:#1a5fb4}`;
